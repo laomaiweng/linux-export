@@ -13,6 +13,7 @@
 
 #include <linux/kthread.h>
 #include <linux/min_heap.h>
+#include <linux/sched/sysctl.h>
 #include <linux/sort.h>
 
 struct find_btree_nodes_worker {
@@ -270,7 +271,7 @@ static int read_btree_nodes_worker(void *p)
 err:
 	bio_put(bio);
 	free_page((unsigned long) buf);
-	percpu_ref_put(&ca->io_ref);
+	percpu_ref_put(&ca->io_ref[READ]);
 	closure_put(w->cl);
 	kfree(w);
 	return 0;
@@ -290,7 +291,7 @@ static int read_btree_nodes(struct find_btree_nodes *f)
 
 		struct find_btree_nodes_worker *w = kmalloc(sizeof(*w), GFP_KERNEL);
 		if (!w) {
-			percpu_ref_put(&ca->io_ref);
+			percpu_ref_put(&ca->io_ref[READ]);
 			ret = -ENOMEM;
 			goto err;
 		}
@@ -302,18 +303,19 @@ static int read_btree_nodes(struct find_btree_nodes *f)
 		struct task_struct *t = kthread_create(read_btree_nodes_worker, w, "read_btree_nodes/%s", ca->name);
 		ret = PTR_ERR_OR_ZERO(t);
 		if (ret) {
-			percpu_ref_put(&ca->io_ref);
+			percpu_ref_put(&ca->io_ref[READ]);
 			kfree(w);
 			bch_err_msg(c, ret, "starting kthread");
 			break;
 		}
 
 		closure_get(&cl);
-		percpu_ref_get(&ca->io_ref);
+		percpu_ref_get(&ca->io_ref[READ]);
 		wake_up_process(t);
 	}
 err:
-	closure_sync(&cl);
+	while (closure_sync_timeout(&cl, sysctl_hung_task_timeout_secs * HZ / 2))
+		;
 	return f->ret ?: ret;
 }
 
@@ -577,10 +579,12 @@ int bch2_get_scanned_nodes(struct bch_fs *c, enum btree_id btree,
 
 		found_btree_node_to_key(&tmp.k, &n);
 
-		struct printbuf buf = PRINTBUF;
-		bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(&tmp.k));
-		bch_verbose(c, "%s(): recovering %s", __func__, buf.buf);
-		printbuf_exit(&buf);
+		if (c->opts.verbose) {
+			struct printbuf buf = PRINTBUF;
+			bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(&tmp.k));
+			bch_verbose(c, "%s(): recovering %s", __func__, buf.buf);
+			printbuf_exit(&buf);
+		}
 
 		BUG_ON(bch2_bkey_validate(c, bkey_i_to_s_c(&tmp.k),
 					  (struct bkey_validate_context) {
