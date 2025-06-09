@@ -932,6 +932,8 @@ static inline void vma_adjust_trans_huge(struct vm_area_struct *vma,
 	(void)next;
 }
 
+static inline void hugetlb_split(struct vm_area_struct *, unsigned long) {}
+
 static inline void vma_iter_free(struct vma_iterator *vmi)
 {
 	mas_destroy(&vmi->mas);
@@ -1459,6 +1461,11 @@ static inline int __call_mmap_prepare(struct file *file,
 		struct vm_area_desc *desc)
 {
 	return file->f_op->mmap_prepare(desc);
+}
+
+static inline void fixup_hugetlb_reservations(struct vm_area_struct *vma)
+{
+	(void)vma;
 }
 
 #endif	/* __MM_VMA_INTERNAL_H */
